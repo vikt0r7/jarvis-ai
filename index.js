@@ -21,15 +21,42 @@ if (!process.env.TELEGRAM_BOT_TOKEN || !process.env.GEMINI_API_KEY) {
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 const ai = new GoogleGenAI({apiKey: process.env.GEMINI_API_KEY});
 
-// Команда /start
-bot.start((ctx) => {
-    ctx.reply('ДЖАРВИС запущен и готов к работе, сэр. Чем могу помочь?');
-});
+const HISTORY_FILE = path.join(__dirname, 'history.json');
+const MAX_HISTORY_LENGTH = 20; // Храним последние 20 сообщений (10 пар вопрос-ответ)
 
-// Функция логирования диалога в markdown файл
+// Функция загрузки истории из JSON
+async function loadChatHistory() {
+    try {
+        const data = await fs.readFile(HISTORY_FILE, 'utf8');
+        return JSON.parse(data);
+    } catch (err) {
+        return {}; // Если файла нет, возвращаем пустой объект
+    }
+}
+
+// Функция сохранения истории в JSON
+async function saveChatHistory(historyData) {
+    try {
+        await fs.writeFile(HISTORY_FILE, JSON.stringify(historyData, null, 2), 'utf8');
+    } catch (err) {
+        console.error('Ошибка при сохранении истории в JSON:', err);
+    }
+}
+
+// Очищаем медиаданные (base64) перед сохранением в историю, чтобы файл JSON не раздувался
+function sanitizePartsForHistory(parts) {
+    return parts.map(part => {
+        if (part.inlineData) {
+            return {text: '[Пользователь прислал медиафайл/документ]'};
+        }
+        return part;
+    });
+}
+
+// Функция логирования диалога в markdown файл (для человека)
 async function logToMarkdown(chatId, username, userMsg, botMsg) {
     const logPath = path.join(__dirname, 'chat_history.md');
-    const timestamp = new Date().toLocaleString('ru-RU', { timeZone: 'Europe/Moscow' });
+    const timestamp = new Date().toLocaleString('ru-RU', {timeZone: 'Europe/Moscow'});
     const logEntry = `### Сообщение от ${timestamp}
 - **ID Чата**: \`${chatId}\`
 - **Пользователь**: @${username || 'не указан'}
@@ -46,6 +73,11 @@ async function logToMarkdown(chatId, username, userMsg, botMsg) {
     }
 }
 
+// Команда /start
+bot.start((ctx) => {
+    ctx.reply('ДЖАРВИС запущен и готов к работе, сэр. Чем могу помочь?');
+});
+
 // Обработка всех типов входящих сообщений
 bot.on('message', async (ctx) => {
     try {
@@ -57,11 +89,9 @@ bot.on('message', async (ctx) => {
         // Обработка контекста реплая (ответ на другое сообщение)
         if (ctx.message.reply_to_message) {
             const repliedMsg = ctx.message.reply_to_message;
-            const repliedSender = repliedMsg.from 
-                ? `@${repliedMsg.from.username || repliedMsg.from.first_name}`
-                : 'Пользователь';
+            const repliedSender = repliedMsg.from ? `@${repliedMsg.from.username || repliedMsg.from.first_name}` : 'Пользователь';
             const repliedText = repliedMsg.text || repliedMsg.caption || '[Медиафайл/Документ]';
-            parts.push({ text: `[Контекст: Пользователь отвечает на сообщение от ${repliedSender}: "${repliedText}"]` });
+            parts.push({text: `[Контекст: Пользователь отвечает на сообщение от ${repliedSender}: "${repliedText}"]`});
         }
 
         // 1. Извлекаем текст сообщения или подпись к медиафайлу
@@ -69,14 +99,12 @@ bot.on('message', async (ctx) => {
 
         // Обработка пересланных сообщений
         if (ctx.message.forward_date) {
-            const sender = ctx.message.forward_from 
-                ? `@${ctx.message.forward_from.username || ctx.message.forward_from.first_name}`
-                : (ctx.message.forward_sender_name || 'Неизвестный отправитель');
+            const sender = ctx.message.forward_from ? `@${ctx.message.forward_from.username || ctx.message.forward_from.first_name}` : (ctx.message.forward_sender_name || 'Неизвестный отправитель');
             promptText = `[Пересланное сообщение от ${sender}]:\n${promptText}`;
         }
 
         if (promptText) {
-            parts.push({ text: promptText });
+            parts.push({text: promptText});
         }
 
         // 2. Обработка Фото
@@ -89,12 +117,11 @@ bot.on('message', async (ctx) => {
             const buffer = Buffer.from(arrayBuffer);
             parts.push({
                 inlineData: {
-                    data: buffer.toString('base64'),
-                    mimeType: 'image/jpeg'
+                    data: buffer.toString('base64'), mimeType: 'image/jpeg'
                 }
             });
             if (!promptText) {
-                parts.push({ text: "Проанализируй присланное изображение, сэр." });
+                parts.push({text: "Проанализируй присланное изображение, сэр."});
             }
         }
 
@@ -108,12 +135,11 @@ bot.on('message', async (ctx) => {
             const buffer = Buffer.from(arrayBuffer);
             parts.push({
                 inlineData: {
-                    data: buffer.toString('base64'),
-                    mimeType: voice.mime_type || 'audio/ogg'
+                    data: buffer.toString('base64'), mimeType: voice.mime_type || 'audio/ogg'
                 }
             });
             if (!promptText) {
-                parts.push({ text: "Прослушай это голосовое сообщение и ответь на него, сэр." });
+                parts.push({text: "Прослушай это голосовое сообщение и ответь на него, сэр."});
             }
         }
 
@@ -127,12 +153,11 @@ bot.on('message', async (ctx) => {
             const buffer = Buffer.from(arrayBuffer);
             parts.push({
                 inlineData: {
-                    data: buffer.toString('base64'),
-                    mimeType: audio.mime_type || 'audio/mpeg'
+                    data: buffer.toString('base64'), mimeType: audio.mime_type || 'audio/mpeg'
                 }
             });
             if (!promptText) {
-                parts.push({ text: "Прослушай этот аудиофайл и прокомментируй его, сэр." });
+                parts.push({text: "Прослушай этот аудиофайл и прокомментируй его, сэр."});
             }
         }
 
@@ -147,12 +172,11 @@ bot.on('message', async (ctx) => {
                 const buffer = Buffer.from(arrayBuffer);
                 parts.push({
                     inlineData: {
-                        data: buffer.toString('base64'),
-                        mimeType: doc.mime_type || 'application/octet-stream'
+                        data: buffer.toString('base64'), mimeType: doc.mime_type || 'application/octet-stream'
                     }
                 });
                 if (!promptText) {
-                    parts.push({ text: `Проанализируй этот документ (${doc.file_name || 'документ'}), сэр.` });
+                    parts.push({text: `Проанализируй этот документ (${doc.file_name || 'документ'}), сэр.`});
                 }
             } else {
                 await ctx.reply("Простите, сэр, этот документ слишком велик. Я могу обрабатывать файлы только до 10 МБ.");
@@ -162,19 +186,28 @@ bot.on('message', async (ctx) => {
 
         // Если прислано что-то другое (стикер, гифка, локация и т.д.)
         if (parts.length === 0) {
-            parts.push({ text: "Пользователь отправил неподдерживаемый объект (например, стикер, анимацию, геолокацию или контакт). Вежливо ответь ему в своем стиле об этом, сэр." });
+            parts.push({text: "Пользователь отправил неподдерживаемый объект (например, стикер, анимацию, геолокацию или контакт). Вежливо ответь ему в своем стиле об этом, сэр."});
         }
 
-        // Запрос к Gemini API (используем быструю и эффективную модель gemini-2.5-flash)
+        // --- РАБОТА С КОНТЕКСТОМ И ИСТОРИЕЙ ---
+        const allHistory = await loadChatHistory();
+        const chatId = ctx.chat.id.toString();
+
+        if (!allHistory[chatId]) {
+            allHistory[chatId] = [];
+        }
+
+        // Подготавливаем текущий запрос для сохранения в историю (без тяжелого base64)
+        const currentUserMessageForHistory = {
+            role: 'user', parts: sanitizePartsForHistory(parts)
+        };
+
+        // Собираем полный контекст для Gemini (История чата + Текущее сообщение со всеми медиафайлами)
+        const contentsForGemini = [...allHistory[chatId], {role: 'user', parts: parts}];
+
+        // Запрос к Gemini API
         const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
-            contents: [
-                {
-                    role: 'user',
-                    parts: parts
-                }
-            ],
-            config: {
+            model: 'gemini-2.5-flash', contents: contentsForGemini, config: {
                 systemInstruction: `Ты — ДЖАРВИС (J.A.R.V.I.S.), легендарный искусственный интеллект-помощник Тони Старка из киноленты "Железный человек". Теперь ты служишь пользователю в качестве его личного преданного ассистента по всем делам.
 Твой характер:
 - Изысканно вежлив, говорит с британским шармом и легкой, тонкой иронией (иногда дружеским сарказмом).
@@ -191,15 +224,13 @@ bot.on('message', async (ctx) => {
 5. "htmlCode" — если пользователь попросил создать/сгенерировать веб-страницу, открытку (например, на день рождения), интерактивный шаблон или визитку, напиши здесь полный, красивый, самодостаточный HTML-код (с инлайновыми CSS-стилями внутри тега <style>, красивыми шрифтами, возможно анимациями на JS и градиентными фонами). В противном случае укажи пустую строку.`,
                 responseMimeType: 'application/json',
                 responseSchema: {
-                    type: 'object',
-                    properties: {
-                        text: { type: 'string' },
-                        reaction: { type: 'string' },
-                        imageKeyword: { type: 'string' },
-                        memeRequest: { type: 'boolean' },
-                        htmlCode: { type: 'string' }
-                    },
-                    required: ['text', 'reaction', 'imageKeyword', 'memeRequest', 'htmlCode']
+                    type: 'object', properties: {
+                        text: {type: 'string'},
+                        reaction: {type: 'string'},
+                        imageKeyword: {type: 'string'},
+                        memeRequest: {type: 'boolean'},
+                        htmlCode: {type: 'string'}
+                    }, required: ['text', 'reaction', 'imageKeyword', 'memeRequest', 'htmlCode']
                 }
             }
         });
@@ -211,21 +242,32 @@ bot.on('message', async (ctx) => {
                 responseObj = JSON.parse(response.text);
             } catch (jsonErr) {
                 console.error('Ошибка парсинга JSON от Gemini:', jsonErr);
-                // На случай сбоя парсинга используем текст напрямую
-                responseObj = { text: response.text, reaction: '', imageKeyword: '', memeRequest: false, htmlCode: '' };
+                responseObj = {text: response.text, reaction: '', imageKeyword: '', memeRequest: false, htmlCode: ''};
             }
 
             // Отправляем текстовый ответ
             await ctx.reply(responseObj.text);
 
-            // Ставим реакцию на целевое сообщение (на исходное сообщение, если это реплай, иначе на текущее)
+            // Обновляем JSON историю после успешного ответа
+            allHistory[chatId].push(currentUserMessageForHistory);
+            allHistory[chatId].push({
+                role: 'model', parts: [{text: response.text}]
+            });
+
+            // Ограничиваем историю лимитом токенов
+            if (allHistory[chatId].length > MAX_HISTORY_LENGTH) {
+                allHistory[chatId] = allHistory[chatId].slice(-MAX_HISTORY_LENGTH);
+            }
+            await saveChatHistory(allHistory);
+
+            // Ставим реакцию на целевое сообщение
             if (responseObj.reaction && responseObj.reaction.trim()) {
                 const reactionEmoji = responseObj.reaction.trim();
-                const targetMessageId = ctx.message.reply_to_message 
-                    ? ctx.message.reply_to_message.message_id 
-                    : ctx.message.message_id;
+                const targetMessageId = ctx.message.reply_to_message ? ctx.message.reply_to_message.message_id : ctx.message.message_id;
                 try {
-                    await ctx.telegram.setMessageReaction(ctx.chat.id, targetMessageId, [{ type: 'emoji', emoji: reactionEmoji }]);
+                    await ctx.telegram.setMessageReaction(ctx.chat.id, targetMessageId, [{
+                        type: 'emoji', emoji: reactionEmoji
+                    }]);
                 } catch (reactError) {
                     console.error('Не удалось установить реакцию:', reactError);
                 }
@@ -236,11 +278,10 @@ bot.on('message', async (ctx) => {
                 const keyword = responseObj.imageKeyword.trim();
                 const photoUrl = `https://loremflickr.com/800/600/${encodeURIComponent(keyword)}`;
                 try {
-                    // Загружаем картинку на сервере, чтобы избежать проблем с редиректами у Telegram
                     const photoRes = await fetch(photoUrl);
                     if (photoRes.ok) {
                         const photoBuffer = Buffer.from(await photoRes.arrayBuffer());
-                        await ctx.replyWithPhoto({ source: photoBuffer }, {
+                        await ctx.replyWithPhoto({source: photoBuffer}, {
                             caption: `Вот изображение по вашему запросу: "${keyword}", сэр.`
                         });
                     } else {
@@ -261,7 +302,7 @@ bot.on('message', async (ctx) => {
                         if (memeData && memeData.url) {
                             const imgRes = await fetch(memeData.url);
                             const imgBuffer = Buffer.from(await imgRes.arrayBuffer());
-                            await ctx.replyWithPhoto({ source: imgBuffer }, {
+                            await ctx.replyWithPhoto({source: imgBuffer}, {
                                 caption: `Сэр, как насчет немного юмора? Мем: "${memeData.title || 'Без названия'}"`
                             });
                         }
@@ -277,8 +318,7 @@ bot.on('message', async (ctx) => {
                     const htmlContent = responseObj.htmlCode.trim();
                     const htmlBuffer = Buffer.from(htmlContent, 'utf8');
                     await ctx.replyWithDocument({
-                        source: htmlBuffer,
-                        filename: 'card.html'
+                        source: htmlBuffer, filename: 'card.html'
                     }, {
                         caption: 'Сэр, я спроектировал и собрал для вас эту HTML-страницу/открытку. Вы можете открыть этот файл в любом браузере.'
                     });
@@ -287,7 +327,7 @@ bot.on('message', async (ctx) => {
                 }
             }
 
-            // Формируем описание входящего сообщения для логов
+            // Формируем описание входящего сообщения для логов в Markdown
             let userMsgSummary = promptText;
             if (ctx.message.photo) userMsgSummary += ' [Изображение]';
             if (ctx.message.voice) userMsgSummary += ' [Голосовое сообщение]';
@@ -295,7 +335,7 @@ bot.on('message', async (ctx) => {
             if (ctx.message.document) userMsgSummary += ` [Документ: ${ctx.message.document.file_name}]`;
             if (!userMsgSummary.trim()) userMsgSummary = '[Медиа или неподдерживаемый тип]';
 
-            // Записываем контекст диалога в файл
+            // Пишем в человекочитаемый лог
             await logToMarkdown(ctx.chat.id, ctx.from.username, userMsgSummary, responseObj.text);
         } else {
             await ctx.reply('Простите, сэр, мне не удалось сформулировать ответ. Запустить повторную диагностику?');
