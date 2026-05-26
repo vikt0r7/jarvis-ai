@@ -1,6 +1,7 @@
 services:
   - type: web
     name: tg-bot
+    plan: free
     runtime: node
     buildCommand: npm install
     startCommand: npm start
