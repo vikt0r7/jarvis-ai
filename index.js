@@ -54,6 +54,16 @@ bot.on('message', async (ctx) => {
 
         const parts = [];
 
+        // Обработка контекста реплая (ответ на другое сообщение)
+        if (ctx.message.reply_to_message) {
+            const repliedMsg = ctx.message.reply_to_message;
+            const repliedSender = repliedMsg.from 
+                ? `@${repliedMsg.from.username || repliedMsg.from.first_name}`
+                : 'Пользователь';
+            const repliedText = repliedMsg.text || repliedMsg.caption || '[Медиафайл/Документ]';
+            parts.push({ text: `[Контекст: Пользователь отвечает на сообщение от ${repliedSender}: "${repliedText}"]` });
+        }
+
         // 1. Извлекаем текст сообщения или подпись к медиафайлу
         let promptText = ctx.message.text || ctx.message.caption || '';
 
@@ -204,11 +214,14 @@ bot.on('message', async (ctx) => {
             // Отправляем текстовый ответ
             await ctx.reply(responseObj.text);
 
-            // Ставим реакцию на сообщение пользователя
+            // Ставим реакцию на целевое сообщение (на исходное сообщение, если это реплай, иначе на текущее)
             if (responseObj.reaction && responseObj.reaction.trim()) {
                 const reactionEmoji = responseObj.reaction.trim();
+                const targetMessageId = ctx.message.reply_to_message 
+                    ? ctx.message.reply_to_message.message_id 
+                    : ctx.message.message_id;
                 try {
-                    await ctx.react(reactionEmoji);
+                    await ctx.telegram.setMessageReaction(ctx.chat.id, targetMessageId, [{ type: 'emoji', emoji: reactionEmoji }]);
                 } catch (reactError) {
                     console.error('Не удалось установить реакцию:', reactError);
                 }
