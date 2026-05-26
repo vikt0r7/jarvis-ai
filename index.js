@@ -1,6 +1,8 @@
 const {Telegraf} = require('telegraf');
 const {GoogleGenAI} = require('@google/genai');
 require('dotenv').config();
+const fs = require('fs').promises;
+const path = require('path');
 
 const express = require('express');
 const app = express();
@@ -24,6 +26,26 @@ bot.start((ctx) => {
     ctx.reply('Привет! Я бот на базе Gemini. Отправь мне любой текстовый запрос, и я постараюсь ответить!');
 });
 
+// Функция логирования диалога в markdown файл
+async function logToMarkdown(chatId, username, userMsg, botMsg) {
+    const logPath = path.join(__dirname, 'chat_history.md');
+    const timestamp = new Date().toLocaleString('ru-RU', { timeZone: 'Europe/Moscow' });
+    const logEntry = `### Сообщение от ${timestamp}
+- **ID Чата**: \`${chatId}\`
+- **Пользователь**: @${username || 'не указан'}
+- **Запрос**: ${userMsg}
+- **Ответ бота**: ${botMsg}
+
+---
+
+`;
+    try {
+        await fs.appendFile(logPath, logEntry, 'utf8');
+    } catch (err) {
+        console.error('Ошибка при записи лога в файл:', err);
+    }
+}
+
 // Обработка входящих текстовых сообщений
 bot.on('text', async (ctx) => {
     try {
@@ -40,6 +62,16 @@ bot.on('text', async (ctx) => {
         // Отправляем ответ пользователю
         if (response && response.text) {
             await ctx.reply(response.text);
+
+            // Ставим реакцию "👍" на сообщение пользователя
+            try {
+                await ctx.react('👍');
+            } catch (reactError) {
+                console.error('Не удалось установить реакцию:', reactError);
+            }
+
+            // Записываем контекст диалога в файл
+            await logToMarkdown(ctx.chat.id, ctx.from.username, userMessage, response.text);
         } else {
             await ctx.reply('Мне не удалось сформулировать ответ. Попробуйте еще раз.');
         }
