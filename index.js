@@ -179,23 +179,27 @@ bot.on('message', async (ctx) => {
 Твой характер:
 - Изысканно вежлив, говорит с британским шармом и легкой, тонкой иронией (иногда дружеским сарказмом).
 - По умолчанию уважительно обращается к пользователю «Сэр» (или «Мэм», если контекст указывает на то, что пишет женщина).
-- Обладает исключительным интеллектом, готов решать любые аналитические, организационные и бытовые задачи: планировать дела, вести списки, структурировать информацию, анализировать присланные документы/картинки/аудио.
-- Твоя речь живая, харизматичная, не похожая на шаблонного робота. Часто употребляй фразы вроде: «Всегда к вашим услугам, сэр», «Запускаю диагностику...», «Позволю себе заметить, сэр...», «Протокол запущен».
+- Обладает исключительным интеллектом, готов решать любые аналитические, организационные и бытовые задачи.
+- Твоя речь живая, харизматичная. Часто употребляй фразы вроде: «Всегда к вашим услугам, сэр», «Запускаю диагностику...», «Позволю себе заметить, сэр...», «Протокол запущен».
 
 Всегда отвечай строго в формате JSON.
 Твой ответ должен содержать:
 1. "text" — живой, вежливый и подробный ответ на русском языке в характере ДЖАРВИСа (используй стандартную разметку Telegram вроде жирного шрифта или курсива для оформления, если уместно).
-2. "reaction" — один эмодзи-реакция для сообщения пользователя (выбери подходящий из: 👍, 👎, ❤️, 🔥, 🥰, 👏, 😁, 🤔, 🤯, 😱, 😢, 🎉, 🙏, 👌, 👀, 🤣, 💯) либо пустая строка, если реакция не уместна.
-3. "imageKeyword" — если пользователь явно просит прислать или показать картинку/изображение, укажи здесь краткий поисковый запрос для картинки на английском языке (1-3 слова), иначе укажи пустую строку.`,
+2. "reaction" — один эмодзи-реакция для сообщения пользователя (выбери подходящий из: 👍, 👎, ❤️, 🔥, 🥰, 👏, 😁, 🤔, 🤯, 😱, 😢, 🎉, 🙏, 👌, 👀, 🤣, 💯) либо пустая строка.
+3. "imageKeyword" — если пользователь просит показать/прислать обычную картинку/фотографию (НЕ мем), укажи краткий поисковый запрос на английском языке (1-3 слова), иначе пустая строка.
+4. "memeRequest" — логическое значение (true/false). Установи в true, только если пользователь явно попросил прислать мем или пошутить картинкой.
+5. "htmlCode" — если пользователь попросил создать/сгенерировать веб-страницу, открытку (например, на день рождения), интерактивный шаблон или визитку, напиши здесь полный, красивый, самодостаточный HTML-код (с инлайновыми CSS-стилями внутри тега <style>, красивыми шрифтами, возможно анимациями на JS и градиентными фонами). В противном случае укажи пустую строку.`,
                 responseMimeType: 'application/json',
                 responseSchema: {
                     type: 'object',
                     properties: {
                         text: { type: 'string' },
                         reaction: { type: 'string' },
-                        imageKeyword: { type: 'string' }
+                        imageKeyword: { type: 'string' },
+                        memeRequest: { type: 'boolean' },
+                        htmlCode: { type: 'string' }
                     },
-                    required: ['text', 'reaction', 'imageKeyword']
+                    required: ['text', 'reaction', 'imageKeyword', 'memeRequest', 'htmlCode']
                 }
             }
         });
@@ -208,7 +212,7 @@ bot.on('message', async (ctx) => {
             } catch (jsonErr) {
                 console.error('Ошибка парсинга JSON от Gemini:', jsonErr);
                 // На случай сбоя парсинга используем текст напрямую
-                responseObj = { text: response.text, reaction: '', imageKeyword: '' };
+                responseObj = { text: response.text, reaction: '', imageKeyword: '', memeRequest: false, htmlCode: '' };
             }
 
             // Отправляем текстовый ответ
@@ -232,11 +236,54 @@ bot.on('message', async (ctx) => {
                 const keyword = responseObj.imageKeyword.trim();
                 const photoUrl = `https://loremflickr.com/800/600/${encodeURIComponent(keyword)}`;
                 try {
-                    await ctx.replyWithPhoto(photoUrl, {
-                        caption: `Вот изображение по вашему запросу: "${keyword}"`
-                    });
+                    // Загружаем картинку на сервере, чтобы избежать проблем с редиректами у Telegram
+                    const photoRes = await fetch(photoUrl);
+                    if (photoRes.ok) {
+                        const photoBuffer = Buffer.from(await photoRes.arrayBuffer());
+                        await ctx.replyWithPhoto({ source: photoBuffer }, {
+                            caption: `Вот изображение по вашему запросу: "${keyword}", сэр.`
+                        });
+                    } else {
+                        throw new Error(`Статус ответа ${photoRes.status}`);
+                    }
                 } catch (photoError) {
                     console.error('Не удалось отправить фото:', photoError);
+                    await ctx.reply(`Простите, сэр. Мне не удалось загрузить изображение по запросу "${keyword}".`);
+                }
+            }
+
+            // Отправляем мем, если запрошено
+            if (responseObj.memeRequest) {
+                try {
+                    const memeRes = await fetch('https://meme-api.com/gimme');
+                    if (memeRes.ok) {
+                        const memeData = await memeRes.json();
+                        if (memeData && memeData.url) {
+                            const imgRes = await fetch(memeData.url);
+                            const imgBuffer = Buffer.from(await imgRes.arrayBuffer());
+                            await ctx.replyWithPhoto({ source: imgBuffer }, {
+                                caption: `Сэр, как насчет немного юмора? Мем: "${memeData.title || 'Без названия'}"`
+                            });
+                        }
+                    }
+                } catch (memeError) {
+                    console.error('Ошибка отправки мема:', memeError);
+                }
+            }
+
+            // Отправляем HTML файл, если сгенерирован код страницы/открытки
+            if (responseObj.htmlCode && responseObj.htmlCode.trim()) {
+                try {
+                    const htmlContent = responseObj.htmlCode.trim();
+                    const htmlBuffer = Buffer.from(htmlContent, 'utf8');
+                    await ctx.replyWithDocument({
+                        source: htmlBuffer,
+                        filename: 'card.html'
+                    }, {
+                        caption: 'Сэр, я спроектировал и собрал для вас эту HTML-страницу/открытку. Вы можете открыть этот файл в любом браузере.'
+                    });
+                } catch (htmlError) {
+                    console.error('Ошибка отправки HTML файла:', htmlError);
                 }
             }
 
